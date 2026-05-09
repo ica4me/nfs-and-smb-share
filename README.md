@@ -576,4 +576,36 @@ systemctl status "$(systemd-escape --path --suffix=automount /mnt/nas-nfs)" --no
 systemctl status "$(systemd-escape --path --suffix=mount /mnt/nas-nfs)" --no-pager
 ```
 
+## Testing FIO(W/R)
+Istall FIO
+```bash
+apt update && apt install -y fio
+mkdir -p /mnt/nas-nfs/testing
+mountpoint -q /mnt/nas-nfs && echo "NFS mounted OK" || echo "NFS belum mounted"
+```
+Test write 1 GB block 4K
+```bash
+fio --name=write_1g_4k --filename=/mnt/nas-nfs/testing/fio-1g-test.bin --rw=write --bs=4k --size=1G --ioengine=libaio --direct=1 --iodepth=32 --numjobs=1 --group_reporting
+```
+
+Test read 1 GB block 4K
+```bash
+sync; echo 3 > /proc/sys/vm/drop_caches
+fio --name=read_1g_4k --filename=/mnt/nas-nfs/testing/fio-1g-test.bin --rw=read --bs=4k --size=1G --ioengine=libaio --direct=1 --iodepth=32 --numjobs=1 --group_reporting
+```
+
+Test write 1 GB block 4M
+```bash
+fio --name=write_1g_4m --filename=/mnt/nas-nfs/testing/fio-1g-test.bin --rw=write --bs=4m --size=1G --ioengine=libaio --direct=1 --iodepth=8 --numjobs=1 --group_reporting
+```
+Test read 1 GB block 4M
+```bash
+sync; echo 3 > /proc/sys/vm/drop_caches
+fio --name=read_1g_4m --filename=/mnt/nas-nfs/testing/fio-1g-test.bin --rw=read --bs=4m --size=1G --ioengine=libaio --direct=1 --iodepth=8 --numjobs=1 --group_reporting
+```
+
+Bersihkan file test
+```bash
+rm -f /mnt/nas-nfs/testing/fio-1g-test.bin
+```
 
