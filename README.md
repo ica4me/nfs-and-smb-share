@@ -1,18 +1,45 @@
-# NAS Docker: NFS + SMB di Ubuntu 22.04
+# NAS Docker Final: NFS + SMB di Ubuntu 22.04
 
-Tutorial ringkas menjalankan NFS dan SMB dalam satu Docker Compose.
+Panduan final dan ringkas untuk menjalankan NFS + SMB dalam satu Docker Compose.
 
-## 1. Siapkan folder
+Status contoh dari server:
+- Disk data: `/dev/sdb1`
+- Mount host: `/srv/nas-share`
+- Share name: `nas-share`
+- SMB user: `xccvme`
+- SMB password: dari `.env`
+- NFS allowed subnet: dari `.env`
+
+---
+
+## 1. Masuk ke folder kerja
 
 ```bash
-sudo mkdir -p nas-docker
-cd nas-docker
+cd ~/nas-docker
 ```
 
-## 2. Buat file `.env`
+Pastikan file berikut ada:
 
 ```bash
-sudo nano .env
+ls -lah
+```
+
+Harus ada:
+
+```text
+.env
+docker-compose.yml
+entrypoint.sh
+```
+
+---
+
+## 2. File `.env` final
+
+Buat/edit:
+
+```bash
+nano .env
 ```
 
 Isi:
@@ -20,24 +47,197 @@ Isi:
 ```env
 NAS_DISK=/dev/sdb
 NAS_PARTITION=/dev/sdb1
-HOST_SHARE=/srv/nas-share
 
+HOST_SHARE=/srv/nas-share
 SHARE_NAME=nas-share
 
 SMB_USER=xccvme
-SMB_PASSWORD=password
+SMB_PASSWORD=This_2me@oke
 
 PUID=1000
 PGID=1000
 
-NFS_ALLOWED=192.168.1.0/24
+NFS_ALLOWED="172.16.3.0/24 172.16.101.0/24 172.16.1.0/24 172.16.2.0/24 172.16.4.0/24 172.16.5.0/24"
+
 NFS_OPTIONS=rw,sync,no_subtree_check,no_root_squash
 ```
 
-## 3. Buat file `docker-compose.yml`
+Tes:
 
 ```bash
-sudo nano docker-compose.yml
+set -a
+source .env
+set +a
+
+echo "$NFS_ALLOWED"
+lsblk "$NAS_DISK"
+```
+
+---
+
+## 3. Mount disk ke host
+
+Jika `/dev/sdb1` sudah tampil mounted ke `/srv/nas-share`, lewati bagian format.
+
+Cek:
+
+```bash
+lsblk
+df -h /srv/nas-share
+```
+
+Jika belum pernah diformat, jalankan ini.
+
+PERINGATAN: perintah ini menghapus isi `/dev/sdb`.
+
+```bash
+set -a
+source .env
+set +a
+
+wipefs -a "$NAS_DISK"
+
+parted -s "$NAS_DISK" mklabel gpt
+parted -s "$NAS_DISK" mkpart primary ext4 0% 100%
+
+partprobe "$NAS_DISK"
+sleep 2
+
+mkfs.ext4 -F "$NAS_PARTITION"
+
+mkdir -p "$HOST_SHARE"
+
+UUID=$(blkid -s UUID -o value "$NAS_PARTITION")
+grep -q "$UUID" /etc/fstab || echo "UUID=$UUID $HOST_SHARE ext4 defaults,nofail 0 2" >> /etc/fstab
+
+mount -a
+
+chown -R "${PUID}:${PGID}" "$HOST_SHARE"
+chmod -R 2775 "$HOST_SHARE"
+
+df -h "$HOST_SHARE"
+lsblk
+```
+
+---
+
+## 4. File `entrypoint.sh` final
+
+Buat/edit:
+
+```bash
+nano entrypoint.sh
+```
+
+Isi:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${SHARE_NAME:=nas-share}"
+: "${SMB_USER:=xccvme}"
+: "${SMB_PASSWORD:=password}"
+: "${PUID:=1000}"
+: "${PGID:=1000}"
+: "${NFS_ALLOWED:=192.168.1.0/24}"
+: "${NFS_OPTIONS:=rw,sync,no_subtree_check,no_root_squash}"
+
+echo "[INFO] Starting NAS container..."
+echo "[INFO] Share name: ${SHARE_NAME}"
+echo "[INFO] NFS allowed: ${NFS_ALLOWED}"
+
+mkdir -p /shared /run/samba /var/log/samba /var/lib/samba/private /run/rpc_pipefs
+
+groupadd -g "${PGID}" nasgroup 2>/dev/null || true
+
+if ! id -u "${SMB_USER}" >/dev/null 2>&1; then
+  useradd -u "${PUID}" -g "${PGID}" -M -s /usr/sbin/nologin "${SMB_USER}"
+fi
+
+chown -R "${PUID}:${PGID}" /shared
+chmod -R 2775 /shared
+
+cat > /etc/samba/smb.conf <<EOC
+[global]
+   server role = standalone server
+   workgroup = WORKGROUP
+   security = user
+   map to guest = never
+   passdb backend = tdbsam
+   server min protocol = SMB2
+   server string = Docker NAS SMB Server
+   log file = /var/log/samba/log.%m
+   max log size = 1000
+
+[${SHARE_NAME}]
+   path = /shared
+   browseable = yes
+   read only = no
+   writable = yes
+   valid users = ${SMB_USER}
+   force user = ${SMB_USER}
+   force group = nasgroup
+   create mask = 0664
+   directory mask = 2775
+EOC
+
+echo -e "${SMB_PASSWORD}\n${SMB_PASSWORD}" | smbpasswd -a -s "${SMB_USER}" || true
+smbpasswd -e "${SMB_USER}"
+
+testparm -s
+
+: > /etc/exports
+
+for CLIENT in ${NFS_ALLOWED}; do
+  echo "/shared ${CLIENT}(${NFS_OPTIONS},fsid=0)" >> /etc/exports
+done
+
+echo "[INFO] /etc/exports:"
+cat /etc/exports
+
+mkdir -p /run/sendsigs.omit.d /run/rpcbind
+touch /run/rpcbind/rpcbind.xdr /run/rpcbind/portmap.xdr || true
+
+rpcbind -w || true
+
+mountpoint -q /proc/fs/nfsd || mount -t nfsd nfsd /proc/fs/nfsd
+
+exportfs -ra
+exportfs -v
+
+rpc.nfsd 8
+
+rpc.mountd --foreground --no-nfs-version 2 --no-nfs-version 3 &
+MOUNTD_PID=$!
+
+nmbd --foreground --no-process-group &
+NMBD_PID=$!
+
+smbd --foreground --no-process-group &
+SMBD_PID=$!
+
+echo "[INFO] SMB and NFS are running."
+
+trap 'echo "[INFO] Stopping..."; kill ${MOUNTD_PID} ${NMBD_PID} ${SMBD_PID} 2>/dev/null || true; exportfs -ua || true; rpc.nfsd 0 || true; exit 0' SIGTERM SIGINT
+
+wait -n ${MOUNTD_PID} ${NMBD_PID} ${SMBD_PID}
+```
+
+Set executable:
+
+```bash
+chmod +x entrypoint.sh
+```
+
+---
+
+## 5. File `docker-compose.yml` final
+
+Buat/edit:
+
+```bash
+nano docker-compose.yml
 ```
 
 Isi:
@@ -47,18 +247,26 @@ services:
   nas-share:
     container_name: nas-share
     hostname: nas-share
+
     build:
       context: .
       dockerfile_inline: |
         FROM ubuntu:22.04
+
         ENV DEBIAN_FRONTEND=noninteractive
+
         RUN apt-get update && \
             apt-get install -y --no-install-recommends \
-              samba nfs-kernel-server nfs-common rpcbind \
-              procps iproute2 ca-certificates && \
+              samba \
+              nfs-kernel-server \
+              nfs-common \
+              rpcbind \
+              procps \
+              iproute2 \
+              ca-certificates && \
             rm -rf /var/lib/apt/lists/*
+
         RUN mkdir -p /shared /run/samba /var/log/samba /var/lib/samba/private /run/rpc_pipefs
-        CMD ["/bin/bash", "-lc", "/entrypoint.sh"]
 
     env_file:
       - .env
@@ -68,149 +276,65 @@ services:
 
     volumes:
       - ${HOST_SHARE}:/shared
+      - ./entrypoint.sh:/entrypoint.sh:ro
       - /lib/modules:/lib/modules:ro
 
     network_mode: host
     privileged: true
     restart: unless-stopped
 
-    command: |
-      bash -euo pipefail -c '
-        cat > /entrypoint.sh << "SCRIPT"
-        #!/usr/bin/env bash
-        set -euo pipefail
-
-        : "${SHARE_NAME:=nas-share}"
-        : "${SMB_USER:=xccvme}"
-        : "${SMB_PASSWORD:=password}"
-        : "${PUID:=1000}"
-        : "${PGID:=1000}"
-        : "${NFS_ALLOWED:=192.168.1.0/24}"
-        : "${NFS_OPTIONS:=rw,sync,no_subtree_check,no_root_squash}"
-
-        mkdir -p /shared
-        groupadd -g "${PGID}" nasgroup 2>/dev/null || true
-
-        if ! id -u "${SMB_USER}" >/dev/null 2>&1; then
-          useradd -u "${PUID}" -g "${PGID}" -M -s /usr/sbin/nologin "${SMB_USER}"
-        fi
-
-        chown -R "${PUID}:${PGID}" /shared
-        chmod -R 2775 /shared
-
-        cat > /etc/samba/smb.conf << EOF_SMB
-        [global]
-           server role = standalone server
-           workgroup = WORKGROUP
-           security = user
-           map to guest = never
-           passdb backend = tdbsam
-           server min protocol = SMB2
-
-        [${SHARE_NAME}]
-           path = /shared
-           browseable = yes
-           read only = no
-           writable = yes
-           valid users = ${SMB_USER}
-           force user = ${SMB_USER}
-           force group = nasgroup
-           create mask = 0664
-           directory mask = 2775
-        EOF_SMB
-
-        echo -e "${SMB_PASSWORD}\n${SMB_PASSWORD}" | smbpasswd -a -s "${SMB_USER}"
-        smbpasswd -e "${SMB_USER}"
-
-        : > /etc/exports
-        for CLIENT in ${NFS_ALLOWED}; do
-          echo "/shared ${CLIENT}(${NFS_OPTIONS},fsid=0)" >> /etc/exports
-        done
-
-        mkdir -p /run/rpcbind
-        rpcbind -w || true
-        mountpoint -q /proc/fs/nfsd || mount -t nfsd nfsd /proc/fs/nfsd
-
-        exportfs -ra
-        rpc.nfsd 8
-        rpc.mountd --foreground --no-nfs-version 2 --no-nfs-version 3 &
-        MOUNTD_PID=$!
-
-        nmbd --foreground --no-process-group &
-        NMBD_PID=$!
-
-        smbd --foreground --no-process-group &
-        SMBD_PID=$!
-
-        trap "kill ${MOUNTD_PID} ${NMBD_PID} ${SMBD_PID} 2>/dev/null || true; exportfs -ua || true; rpc.nfsd 0 || true; exit 0" SIGTERM SIGINT
-        wait -n ${MOUNTD_PID} ${NMBD_PID} ${SMBD_PID}
-        SCRIPT
-
-        chmod +x /entrypoint.sh
-        exec /entrypoint.sh
-      '
+    entrypoint:
+      - /entrypoint.sh
 ```
 
-## 4. Format dan mount disk
-
-> HATI-HATI: langkah ini menghapus isi `/dev/sdb`.
+Validasi:
 
 ```bash
-cd nas-docker
-set -a
-source .env
-set +a
-
-lsblk "$NAS_DISK"
+docker compose config
 ```
 
-Jika target disk sudah benar:
+---
+
+## 6. Jalankan container
 
 ```bash
-sudo wipefs -a "$NAS_DISK"
-sudo parted -s "$NAS_DISK" mklabel gpt
-sudo parted -s "$NAS_DISK" mkpart primary ext4 0% 100%
-sudo partprobe "$NAS_DISK"
-sleep 2
-sudo mkfs.ext4 -F "$NAS_PARTITION"
-
-sudo mkdir -p "$HOST_SHARE"
-UUID=$(sudo blkid -s UUID -o value "$NAS_PARTITION")
-echo "UUID=$UUID $HOST_SHARE ext4 defaults,nofail 0 2" | sudo tee -a /etc/fstab
-sudo mount -a
-sudo chown -R "${PUID}:${PGID}" "$HOST_SHARE"
-sudo chmod -R 2775 "$HOST_SHARE"
-
-df -h "$HOST_SHARE"
+docker compose down
+docker compose up -d --build
+docker ps -a
+docker logs -f nas-share
 ```
 
-## 5. Jalankan Docker Compose
+Log berhasil:
+
+```text
+[INFO] /etc/exports:
+[INFO] SMB and NFS are running.
+```
+
+---
+
+## 7. Cek NFS export
 
 ```bash
-cd nas-docker
-sudo docker compose up -d --build
-sudo docker logs -f nas-share
+docker exec -it nas-share exportfs -v
 ```
 
-## 6. Cek service
+---
+
+## 8. Buka firewall jika UFW aktif
 
 ```bash
-sudo docker ps
-sudo docker exec -it nas-share exportfs -v
+ufw allow 445/tcp
+ufw allow 139/tcp
+ufw allow 2049/tcp
+ufw allow 111/tcp
+ufw allow 111/udp
+ufw reload
 ```
 
-## 7. Buka firewall jika UFW aktif
+---
 
-```bash
-sudo ufw allow 445/tcp
-sudo ufw allow 139/tcp
-sudo ufw allow 2049/tcp
-sudo ufw allow 111/tcp
-sudo ufw allow 111/udp
-sudo ufw reload
-```
-
-## 8. Akses SMB
+## 9. Akses SMB
 
 Dari Windows:
 
@@ -222,7 +346,7 @@ Login:
 
 ```text
 Username: xccvme
-Password: password
+Password: This_2me@oke
 ```
 
 Dari Linux:
@@ -230,10 +354,12 @@ Dari Linux:
 ```bash
 sudo apt install -y cifs-utils
 sudo mkdir -p /mnt/nas-smb
-sudo mount -t cifs //IP_SERVER/nas-share /mnt/nas-smb -o username=xccvme,password=password,vers=3.0,rw
+sudo mount -t cifs //IP_SERVER/nas-share /mnt/nas-smb -o username=xccvme,password='This_2me@oke',vers=3.0,rw
 ```
 
-## 9. Akses NFS dari Linux
+---
+
+## 10. Akses NFS dari Linux
 
 ```bash
 sudo apt install -y nfs-common
@@ -241,52 +367,112 @@ sudo mkdir -p /mnt/nas-nfs
 sudo mount -t nfs4 IP_SERVER:/ /mnt/nas-nfs
 ```
 
-## 10. Ubah akses NFS
-
-Edit `.env`:
-
-```bash
-sudo nano nas-docker/.env
-```
-
 Contoh:
 
-```env
-NFS_ALLOWED=192.168.1.0/24 10.10.10.0/24
+```bash
+sudo mount -t nfs4 172.16.3.1:/ /mnt/nas-nfs
 ```
 
-Restart container:
+---
+
+## 11. Tes read/write
+
+Di SMB atau NFS client:
 
 ```bash
-cd nas-docker
-sudo docker compose up -d --force-recreate
+touch /mnt/nas-nfs/test-write.txt
+echo "ok" > /mnt/nas-nfs/test-write.txt
+cat /mnt/nas-nfs/test-write.txt
 ```
 
-## 11. Stop dan start ulang
+Di server:
+
+```bash
+ls -lah /srv/nas-share
+```
+
+---
+
+## 12. Troubleshooting cepat
+
+Container restart terus:
+
+```bash
+docker logs nas-share
+```
+
+Validasi compose:
+
+```bash
+docker compose config
+```
+
+Pastikan mount ada:
+
+```bash
+df -h /srv/nas-share
+lsblk
+```
+
+Reset container:
+
+```bash
+docker compose down
+docker compose up -d --build --force-recreate
+```
+
+Cek isi file export di container:
+
+```bash
+docker exec -it nas-share cat /etc/exports
+```
+
+Cek Samba config:
+
+```bash
+docker exec -it nas-share testparm -s
+```
+
+---
+
+## 13. Stop dan start
 
 Stop:
 
 ```bash
-cd nas-docker
-sudo docker compose down
+docker compose down
 ```
 
 Start:
 
 ```bash
-cd nas-docker
-sudo docker compose up -d
+docker compose up -d
 ```
 
-## 12. Catatan cepat
+---
 
-- `restart: unless-stopped` membuat container otomatis hidup kembali kecuali dihentikan manual.
+## Catatan keamanan
+
 - SMB memakai user/password dari `.env`.
-- NFS hanya boleh diakses dari IP/CIDR pada `NFS_ALLOWED`.
-- Untuk keamanan lebih baik, ganti `no_root_squash` menjadi `root_squash`.
+- NFS hanya dibatasi IP/CIDR pada `NFS_ALLOWED`, tidak memakai password.
+- `no_root_squash` memudahkan akses root dari client, tetapi kurang aman.
+- Untuk lebih aman, ubah:
+
+```env
+NFS_OPTIONS=rw,sync,no_subtree_check,root_squash
+```
+
+lalu restart:
+
+```bash
+docker compose up -d --force-recreate
+```
+
+---
 
 ## Referensi
 
+- Docker Compose interpolation: https://docs.docker.com/reference/compose-file/interpolation/
 - Docker restart policy: https://docs.docker.com/engine/containers/start-containers-automatically/
+- Ubuntu NFS: https://ubuntu.com/server/docs/how-to/networking/install-nfs/
 - Samba smb.conf: https://www.samba.org/samba/docs/current/man-html/smb.conf.5.html
-- Ubuntu NFS: https://ubuntu.com/server/docs/how-to/networking/install-nfs
