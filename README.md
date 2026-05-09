@@ -488,13 +488,14 @@ docker compose up -d --force-recreate
 ## Advanve
 Mount permanent di VM client NFS(Linux)
 ```
-cat <<'EOF' > /root/setup-nfs-automount-clean.sh
+cat <<'EOF' > /root/setup-nfs-automount-safe.sh
 #!/usr/bin/env bash
 set -euo pipefail
 
 NFS_SERVER="172.16.3.253"
 NFS_REMOTE="/"
 MOUNT_POINT="/mnt/nas-nfs"
+FSTAB_LINE="${NFS_SERVER}:${NFS_REMOTE} ${MOUNT_POINT} nfs4 rw,hard,timeo=600,retrans=2,nofail,noauto,_netdev,x-systemd.automount,x-systemd.idle-timeout=600,x-systemd.mount-timeout=30s 0 0"
 
 echo "[INFO] Install nfs-common..."
 apt update
@@ -506,49 +507,73 @@ mkdir -p "${MOUNT_POINT}"
 echo "[INFO] Backup /etc/fstab..."
 cp /etc/fstab "/etc/fstab.bak.$(date +%F-%H%M%S)"
 
-echo "[INFO] Hapus entry lama untuk ${MOUNT_POINT} jika ada..."
-sed -i "\|[[:space:]]${MOUNT_POINT}[[:space:]]|d" /etc/fstab
+echo "[INFO] Update entry /etc/fstab hanya untuk ${MOUNT_POINT}..."
 
-echo "[INFO] Tambahkan entry NFS automount ke /etc/fstab..."
-cat <<EOL >> /etc/fstab
-${NFS_SERVER}:${NFS_REMOTE} ${MOUNT_POINT} nfs4 rw,hard,timeo=600,retrans=2,nofail,noauto,_netdev,x-systemd.automount,x-systemd.idle-timeout=600,x-systemd.mount-timeout=30s 0 0
-EOL
+if grep -Eq "[[:space:]]${MOUNT_POINT}[[:space:]]" /etc/fstab; then
+  cp /etc/fstab /tmp/fstab.nas.old
+  awk -v mp="${MOUNT_POINT}" -v newline="${FSTAB_LINE}" '
+    BEGIN { done=0 }
+    $0 ~ "^[[:space:]]*#" { print; next }
+    $2 == mp {
+      if (done == 0) {
+        print newline
+        done=1
+      }
+      next
+    }
+    { print }
+    END {
+      if (done == 0) print newline
+    }
+  ' /tmp/fstab.nas.old > /etc/fstab
+else
+  echo "${FSTAB_LINE}" >> /etc/fstab
+fi
 
 echo "[INFO] Reload systemd..."
 systemctl daemon-reload
 
-echo "[INFO] Unmount manual jika masih aktif..."
-umount "${MOUNT_POINT}" 2>/dev/null || true
-
 AUTO_UNIT="$(systemd-escape --path --suffix=automount "${MOUNT_POINT}")"
 MOUNT_UNIT="$(systemd-escape --path --suffix=mount "${MOUNT_POINT}")"
 
-echo "[INFO] Restart generated automount unit..."
-systemctl restart "${AUTO_UNIT}"
+echo "[INFO] Unit automount: ${AUTO_UNIT}"
+echo "[INFO] Unit mount    : ${MOUNT_UNIT}"
+
+if mountpoint -q "${MOUNT_POINT}"; then
+  echo "[OK] ${MOUNT_POINT} sudah mounted. Tidak di-unmount dan tidak mengganggu mount aktif."
+  echo "[INFO] Automount dari fstab akan aktif otomatis setelah reboot."
+else
+  echo "[INFO] ${MOUNT_POINT} belum mounted. Start automount sekarang..."
+  systemctl restart "${AUTO_UNIT}" || {
+    echo "[WARN] Automount gagal start. Coba mount langsung sekali..."
+    mount "${MOUNT_POINT}" || true
+  }
+fi
 
 echo
-echo "[OK] Setup selesai."
-echo "Automount unit : ${AUTO_UNIT}"
-echo "Mount unit     : ${MOUNT_UNIT}"
-echo "Mount point    : ${MOUNT_POINT}"
-echo "NFS target     : ${NFS_SERVER}:${NFS_REMOTE}"
+echo "[INFO] Isi fstab untuk NAS:"
+grep -E "[[:space:]]${MOUNT_POINT}[[:space:]]" /etc/fstab || true
+
 echo
-echo "[TEST] Akses folder untuk memicu automount:"
-ls -lah "${MOUNT_POINT}" || true
+echo "[INFO] Status mount saat ini:"
+mountpoint "${MOUNT_POINT}" || true
 df -h "${MOUNT_POINT}" || true
+ls -lah "${MOUNT_POINT}" || true
+
 echo
-echo "[STATUS]"
-systemctl status "${AUTO_UNIT}" --no-pager || true
+echo "[OK] Selesai."
+echo "Setelah reboot, akses '${MOUNT_POINT}' akan memicu mount otomatis."
 EOF
 
-chmod +x /root/setup-nfs-automount-clean.sh
-bash /root/setup-nfs-automount-clean.sh
+chmod +x /root/setup-nfs-automount-safe.sh
+bash /root/setup-nfs-automount-safe.sh
 ```
 Setelah itu tes:
 ```
 ls /mnt/nas-nfs
 df -h /mnt/nas-nfs
-systemctl status "$(systemd-escape --path --suffix=automount /mnt/nas-nfs)"
+systemctl status "$(systemd-escape --path --suffix=automount /mnt/nas-nfs)" --no-pager
+systemctl status "$(systemd-escape --path --suffix=mount /mnt/nas-nfs)" --no-pager
 ```
 
 
