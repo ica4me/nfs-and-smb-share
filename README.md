@@ -5,8 +5,8 @@ Tutorial ringkas menjalankan NFS dan SMB dalam satu Docker Compose.
 ## 1. Siapkan folder
 
 ```bash
-sudo mkdir -p /opt/nas-docker
-cd /opt/nas-docker
+sudo mkdir -p nas-docker
+cd nas-docker
 ```
 
 ## 2. Buat file `.env`
@@ -156,7 +156,7 @@ services:
 > HATI-HATI: langkah ini menghapus isi `/dev/sdb`.
 
 ```bash
-cd /opt/nas-docker
+cd nas-docker
 set -a
 source .env
 set +a
@@ -187,7 +187,7 @@ df -h "$HOST_SHARE"
 ## 5. Jalankan Docker Compose
 
 ```bash
-cd /opt/nas-docker
+cd nas-docker
 sudo docker compose up -d --build
 sudo docker logs -f nas-share
 ```
@@ -246,7 +246,7 @@ sudo mount -t nfs4 IP_SERVER:/ /mnt/nas-nfs
 Edit `.env`:
 
 ```bash
-sudo nano /opt/nas-docker/.env
+sudo nano nas-docker/.env
 ```
 
 Contoh:
@@ -258,7 +258,7 @@ NFS_ALLOWED=192.168.1.0/24 10.10.10.0/24
 Restart container:
 
 ```bash
-cd /opt/nas-docker
+cd nas-docker
 sudo docker compose up -d --force-recreate
 ```
 
@@ -267,14 +267,14 @@ sudo docker compose up -d --force-recreate
 Stop:
 
 ```bash
-cd /opt/nas-docker
+cd nas-docker
 sudo docker compose down
 ```
 
 Start:
 
 ```bash
-cd /opt/nas-docker
+cd nas-docker
 sudo docker compose up -d
 ```
 
