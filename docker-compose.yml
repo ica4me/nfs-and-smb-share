@@ -1,0 +1,42 @@
+services:
+  nas-share:
+    container_name: nas-share
+    hostname: nas-share
+
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM ubuntu:22.04
+
+        ENV DEBIAN_FRONTEND=noninteractive
+
+        RUN apt-get update && \
+            apt-get install -y --no-install-recommends \
+              samba \
+              nfs-kernel-server \
+              nfs-common \
+              rpcbind \
+              procps \
+              iproute2 \
+              ca-certificates && \
+            rm -rf /var/lib/apt/lists/*
+
+        RUN mkdir -p /shared /run/samba /var/log/samba /var/lib/samba/private /run/rpc_pipefs
+
+    env_file:
+      - .env
+
+    environment:
+      TZ: Asia/Jakarta
+
+    volumes:
+      - ${HOST_SHARE}:/shared
+      - ./entrypoint.sh:/entrypoint.sh:ro
+      - /lib/modules:/lib/modules:ro
+
+    network_mode: host
+    privileged: true
+    restart: unless-stopped
+
+    entrypoint:
+      - /entrypoint.sh
