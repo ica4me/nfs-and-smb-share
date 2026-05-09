@@ -12,7 +12,10 @@ Status contoh dari server:
 
 ---
 
-## 1. Masuk ke folder kerja
+## 1. Download & Masuk ke folder kerja
+```
+git clone https://github.com/ica4me/nfs-and-smb-share.git nfs-and-smb-share
+```
 
 ```bash
 cd ~/nas-docker
