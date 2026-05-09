@@ -362,7 +362,7 @@ sudo mount -t cifs //IP_SERVER/nas-share /mnt/nas-smb -o username=usernameforlog
 
 ---
 
-## 10. Akses NFS dari Linux
+## 10. Akses NFS dari Linux dan Windows SMB
 
 ```bash
 sudo apt install -y nfs-common
@@ -373,7 +373,12 @@ sudo mount -t nfs4 IP_SERVER:/ /mnt/nas-nfs
 Contoh:
 
 ```bash
-sudo mount -t nfs4 172.16.3.1:/ /mnt/nas-nfs
+sudo mount -t nfs4 172.16.3.253:/ /mnt/nas-nfs
+```
+
+Di Windows + R (Network)
+```bash
+\\172.16.3.253\nas-share
 ```
 
 ---
@@ -479,3 +484,65 @@ docker compose up -d --force-recreate
 - Docker restart policy: https://docs.docker.com/engine/containers/start-containers-automatically/
 - Ubuntu NFS: https://ubuntu.com/server/docs/how-to/networking/install-nfs/
 - Samba smb.conf: https://www.samba.org/samba/docs/current/man-html/smb.conf.5.html
+
+## Advanve
+Mount permanent di VM client NFS(Linux)
+```
+cat <<'EOF' > /root/setup-nas-nfs-automount.sh
+#!/usr/bin/env bash
+set -euo pipefail
+
+NFS_SERVER="172.16.3.253"
+NFS_REMOTE="/"
+MOUNT_POINT="/mnt/nas-nfs"
+
+apt update
+apt install -y nfs-common
+
+mkdir -p "${MOUNT_POINT}"
+
+# Backup fstab
+cp /etc/fstab "/etc/fstab.bak.$(date +%F-%H%M%S)"
+
+# Hapus entry lama untuk mount point ini jika ada
+sed -i "\|[[:space:]]${MOUNT_POINT}[[:space:]]|d" /etc/fstab
+
+# Tambahkan entry NFS automount
+cat <<EOL >> /etc/fstab
+${NFS_SERVER}:${NFS_REMOTE} ${MOUNT_POINT} nfs4 rw,hard,timeo=600,retrans=2,nofail,_netdev,x-systemd.automount,x-systemd.idle-timeout=600,x-systemd.mount-timeout=30s 0 0
+EOL
+
+systemctl daemon-reload
+
+# Bersihkan mount manual lama jika masih aktif
+umount "${MOUNT_POINT}" 2>/dev/null || true
+
+# Nama unit automount dari path /mnt/nas-nfs
+AUTO_UNIT="$(systemd-escape --path --suffix=automount "${MOUNT_POINT}")"
+
+systemctl enable "${AUTO_UNIT}"
+systemctl restart "${AUTO_UNIT}"
+
+echo
+echo "[OK] NFS automount aktif."
+echo "Mount point : ${MOUNT_POINT}"
+echo "NFS server  : ${NFS_SERVER}:${NFS_REMOTE}"
+echo "Unit        : ${AUTO_UNIT}"
+echo
+echo "Tes:"
+echo "  ls ${MOUNT_POINT}"
+echo "  df -h ${MOUNT_POINT}"
+echo "  systemctl status ${AUTO_UNIT}"
+EOF
+
+chmod +x /root/setup-nas-nfs-automount.sh
+bash /root/setup-nas-nfs-automount.sh
+```
+Setelah itu tes:
+```
+ls /mnt/nas-nfs
+df -h /mnt/nas-nfs
+systemctl status "$(systemd-escape --path --suffix=automount /mnt/nas-nfs)"
+```
+
+
