@@ -488,7 +488,7 @@ docker compose up -d --force-recreate
 ## Advanve
 Mount permanent di VM client NFS(Linux)
 ```
-cat <<'EOF' > /root/setup-nas-nfs-automount.sh
+cat <<'EOF' > /root/setup-nfs-automount-clean.sh
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -496,47 +496,53 @@ NFS_SERVER="172.16.3.253"
 NFS_REMOTE="/"
 MOUNT_POINT="/mnt/nas-nfs"
 
+echo "[INFO] Install nfs-common..."
 apt update
 apt install -y nfs-common
 
+echo "[INFO] Siapkan mount point..."
 mkdir -p "${MOUNT_POINT}"
 
-# Backup fstab
+echo "[INFO] Backup /etc/fstab..."
 cp /etc/fstab "/etc/fstab.bak.$(date +%F-%H%M%S)"
 
-# Hapus entry lama untuk mount point ini jika ada
+echo "[INFO] Hapus entry lama untuk ${MOUNT_POINT} jika ada..."
 sed -i "\|[[:space:]]${MOUNT_POINT}[[:space:]]|d" /etc/fstab
 
-# Tambahkan entry NFS automount
+echo "[INFO] Tambahkan entry NFS automount ke /etc/fstab..."
 cat <<EOL >> /etc/fstab
-${NFS_SERVER}:${NFS_REMOTE} ${MOUNT_POINT} nfs4 rw,hard,timeo=600,retrans=2,nofail,_netdev,x-systemd.automount,x-systemd.idle-timeout=600,x-systemd.mount-timeout=30s 0 0
+${NFS_SERVER}:${NFS_REMOTE} ${MOUNT_POINT} nfs4 rw,hard,timeo=600,retrans=2,nofail,noauto,_netdev,x-systemd.automount,x-systemd.idle-timeout=600,x-systemd.mount-timeout=30s 0 0
 EOL
 
+echo "[INFO] Reload systemd..."
 systemctl daemon-reload
 
-# Bersihkan mount manual lama jika masih aktif
+echo "[INFO] Unmount manual jika masih aktif..."
 umount "${MOUNT_POINT}" 2>/dev/null || true
 
-# Nama unit automount dari path /mnt/nas-nfs
 AUTO_UNIT="$(systemd-escape --path --suffix=automount "${MOUNT_POINT}")"
+MOUNT_UNIT="$(systemd-escape --path --suffix=mount "${MOUNT_POINT}")"
 
-systemctl enable "${AUTO_UNIT}"
+echo "[INFO] Restart generated automount unit..."
 systemctl restart "${AUTO_UNIT}"
 
 echo
-echo "[OK] NFS automount aktif."
-echo "Mount point : ${MOUNT_POINT}"
-echo "NFS server  : ${NFS_SERVER}:${NFS_REMOTE}"
-echo "Unit        : ${AUTO_UNIT}"
+echo "[OK] Setup selesai."
+echo "Automount unit : ${AUTO_UNIT}"
+echo "Mount unit     : ${MOUNT_UNIT}"
+echo "Mount point    : ${MOUNT_POINT}"
+echo "NFS target     : ${NFS_SERVER}:${NFS_REMOTE}"
 echo
-echo "Tes:"
-echo "  ls ${MOUNT_POINT}"
-echo "  df -h ${MOUNT_POINT}"
-echo "  systemctl status ${AUTO_UNIT}"
+echo "[TEST] Akses folder untuk memicu automount:"
+ls -lah "${MOUNT_POINT}" || true
+df -h "${MOUNT_POINT}" || true
+echo
+echo "[STATUS]"
+systemctl status "${AUTO_UNIT}" --no-pager || true
 EOF
 
-chmod +x /root/setup-nas-nfs-automount.sh
-bash /root/setup-nas-nfs-automount.sh
+chmod +x /root/setup-nfs-automount-clean.sh
+bash /root/setup-nfs-automount-clean.sh
 ```
 Setelah itu tes:
 ```
