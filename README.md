@@ -6,7 +6,7 @@ Status contoh dari server:
 - Disk data: `/dev/sdb1`
 - Mount host: `/srv/nas-share`
 - Share name: `nas-share`
-- SMB user: `xccvme`
+- SMB user: `usernameforlogin`
 - SMB password: dari `.env`
 - NFS allowed subnet: dari `.env`
 
@@ -51,8 +51,8 @@ NAS_PARTITION=/dev/sdb1
 HOST_SHARE=/srv/nas-share
 SHARE_NAME=nas-share
 
-SMB_USER=xccvme
-SMB_PASSWORD=This_2me@oke
+SMB_USER=usernameforlogin
+SMB_PASSWORD=PASSWORDSMB
 
 PUID=1000
 PGID=1000
@@ -136,7 +136,7 @@ Isi:
 set -euo pipefail
 
 : "${SHARE_NAME:=nas-share}"
-: "${SMB_USER:=xccvme}"
+: "${SMB_USER:=usernameforlogin}"
 : "${SMB_PASSWORD:=password}"
 : "${PUID:=1000}"
 : "${PGID:=1000}"
@@ -345,8 +345,8 @@ Dari Windows:
 Login:
 
 ```text
-Username: xccvme
-Password: This_2me@oke
+Username: usernameforlogin
+Password: PASSWORDSMB
 ```
 
 Dari Linux:
@@ -354,7 +354,7 @@ Dari Linux:
 ```bash
 sudo apt install -y cifs-utils
 sudo mkdir -p /mnt/nas-smb
-sudo mount -t cifs //IP_SERVER/nas-share /mnt/nas-smb -o username=xccvme,password='This_2me@oke',vers=3.0,rw
+sudo mount -t cifs //IP_SERVER/nas-share /mnt/nas-smb -o username=usernameforlogin,password='PASSWORDSMB',vers=3.0,rw
 ```
 
 ---
